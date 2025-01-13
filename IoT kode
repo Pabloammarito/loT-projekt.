@@ -1,1 +1,152 @@
+from machine import UART, Pin, PWM, ADC
+from gps_simple import GPS_SIMPLE
+from machine import Pin
+from gpio_lcd import GpioLcd
+from time import sleep_ms, ticks_ms, sleep
+from lmt87 import LMT87
+from uthingsboard.client import TBDeviceMqttClient
+import gc
+import secrets
+from gps_simple import GPS_SIMPLE
+from hcsr04 import HCSR04
+from neopixel import NeoPixel
 
+
+usonic = HCSR04(trigger_pin=15, echo_pin=35, echo_timeout_us=10000)
+buzz = PWM(Pin(14, Pin.OUT))
+n = 16
+p = 12
+np = NeoPixel(Pin(p, Pin.OUT), n)
+
+
+gps_port = 2                                 
+gps_speed = 9600                             
+uart = UART(gps_port, gps_speed)             
+gps = GPS_SIMPLE(uart)
+lcd = GpioLcd(rs_pin=Pin(27), enable_pin=Pin(25),
+              d4_pin=Pin(33), d5_pin=Pin(32), d6_pin=Pin(21), d7_pin=Pin(22),
+              num_lines=4, num_columns=20)
+
+
+pin_lmt87 = 35
+
+average = 1                            
+
+t1 = 25.2
+adc1 = 2659
+t2 = 24.2
+adc2 = 2697
+###
+client = TBDeviceMqttClient(secrets.SERVER_IP_ADDRESS, access_token = secrets.ACCESS_TOKEN)
+client.connect()                           
+
+
+uart = UART(gps_port, gps_speed)             
+gps = GPS_SIMPLE(uart)                       
+temp = LMT87(pin_lmt87)
+
+
+start = ticks_ms()
+delay_ms = 50
+
+
+distance = 0
+
+
+start_time = ticks_ms()
+threshold_milliseconds = 3000  
+display_state = 0              
+
+potmeter_adc = ADC(Pin(34))
+potmeter_adc.atten(ADC.ATTN_11DB)      
+
+adc1 = 1255
+U1 = 3.9
+adc2 = 2750
+U2 = 8.0
+
+a = (U1-U2)/(adc1-adc2)
+b = U2 - a*adc2
+
+def batt_voltage(adc_v):
+    u_batt = a*adc_v+b
+    return u_batt
+
+
+def batt_percentage(u_batt):
+    without_offset = (u_batt-6)
+    normalized = without_offset / (8.4-6.0)
+    percent = normalized * 100
+    return percent
+
+
+previous_battery_percent = 0
+
+
+def set_color(r, g, b):
+    for i in range(n):
+        np[i] = (r, g, b)
+    np.write()
+
+
+print("LMT87 test\n")
+
+print(temp.calibrate(t1, adc1, t2, adc2))
+   
+   
+while True:
+    
+    if gps.receive_nmea_data():
+        print(f"UTC YYYY-MM-DD  : {gps.get_utc_year()}-{gps.get_utc_month():02d}-{gps.get_utc_day():02d}")
+        print(f"UTC HH:MM:SS    : {gps.get_utc_hours()}:{gps.get_utc_minutes():02d}:{gps.get_utc_seconds():02d}")
+        print(f"Latitude        : {gps.get_latitude():.8f}")
+        print(f"Longitude       : {gps.get_longitude():.8f}")
+        print(f"Validity        : {gps.get_validity()}")
+        print(f"Speed           : {gps.get_speed()}")
+        print(f"Course          : {gps.get_course():.1f}\n")
+        adc_val = temp.get_adc_value()
+        temperature = temp.get_temperature()
+        print("temp: %d C %d" % (temperature, adc_val))
+        batteri = a*adc_val+b
+        val = potmeter_adc.read()
+        batteriprocent = batt_voltage(val)/8.4*100
+        print('procent', batteriprocent)
+        print (batteriprocent)
+       
+       
+        lat = gps.get_latitude()
+        lon = gps.get_longitude()
+        spe = gps.get_speed()
+        cou = gps.get_course()
+        tem = temp.get_temperature()
+        Bat = batt_voltage(val)/8.4*100
+       
+        telemetry = {'latitude': str(lat), 'longitude': str(lon), 'speed': str(spe), 'course': str(cou), 'temperature': str(tem), 'batteriprocent': str(Bat)}
+        client.send_telemetry(telemetry)
+
+       
+    sleep(1)
+    
+    if ticks_ms() - start_time > threshold_milliseconds:
+        start_time = ticks_ms()  
+        display_state = (display_state + 1) % 6 
+        lcd.clear()
+
+        if display_state == 0:
+            lcd.move_to(0, 0)
+            lcd.putstr(f"Latitude: {gps.get_latitude():.8f}")
+        elif display_state == 1:
+            lcd.move_to(0, 0)
+            lcd.putstr(f"Longitude: {gps.get_longitude():.8f}")
+        elif display_state == 2:
+            lcd.move_to(0, 0)
+            lcd.putstr(f"Speed: {gps.get_speed()} km/h")
+        elif display_state == 3:
+            lcd.move_to(0, 0)
+            lcd.putstr(f"Course: {gps.get_course():.1f} deg")
+        elif display_state == 4:
+            lcd.move_to(0, 0)
+            lcd.putstr("temp: %d C %d" % (temperature, adc_val))
+        elif display_state == 5:
+            lcd.move_to(0, 0)
+            lcd.putstr(f"Batteriprocent: {str(int(batteriprocent))}%")
