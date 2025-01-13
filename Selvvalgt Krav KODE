@@ -1,1 +1,53 @@
+from machine import UART, Pin, PWM
+from time import ticks_ms, sleep_ms
+from gps_simple import GPS_SIMPLE
+from hcsr04 import HCSR04
+from neopixel import NeoPixel
+
+buzz = PWM(Pin(14, Pin.OUT))
+
+usonic = HCSR04(trigger_pin=15, echo_pin=35, echo_timeout_us=10000)
+
+n = 16
+p = 12
+np = NeoPixel(Pin(p, Pin.OUT), n)
+
+gps_port = 2
+gps_speed = 9600
+uart = UART(gps_port, gps_speed) 
+gps = GPS_SIMPLE(uart)
+
+def set_color(r, g, b):
+    for i in range(n):
+        np[i] = (r, g, b)
+    np.write()
+
+start = ticks_ms()
+delay_ms = 50
+
+distance = 0
+
+while True:
+    if gps.receive_nmea_data():
+        speed_kmh = gps.get_speed()  
+        print(f"Speed: {speed_kmh} km/t")
+
+        
+        if ticks_ms() - start > delay_ms:
+            distance = usonic.distance_cm()
+            print(f"Distance: {distance} cm")
+            start = ticks_ms()
+
+        
+        if speed_kmh > 0.02 and 0 < distance <= 170:
+            
+            set_color(100, 0, 0)
+            buzz.duty(512)
+            buzz.freq(220)
+        else:
+            
+            set_color(0, 0, 0)
+            buzz.duty(0)
+
+    sleep_ms(10)
 
